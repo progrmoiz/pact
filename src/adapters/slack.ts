@@ -1,4 +1,5 @@
 import { WebClient } from '@slack/web-api';
+import { loadScope } from '../scope.js';
 import { mightContainCommitment } from '../pre-filter.js';
 import { addToBatch, startBatchTimer, stopBatchTimer, flushAll, type MessageBatch } from '../batcher.js';
 import { extractCommitments } from '../extract.js';
@@ -144,7 +145,10 @@ async function processBatches(batches: MessageBatch[]): Promise<void> {
 
 interface ChannelInfo {
   id: string;
-  updated: number; // epoch seconds
+  updated: number;
+  type: 'channel' | 'im' | 'mpim';
+  userId?: string; // for DMs — the other person's user ID
+  name?: string;
 }
 
 async function discoverChannels(client: WebClient): Promise<ChannelInfo[]> {
@@ -162,9 +166,15 @@ async function discoverChannels(client: WebClient): Promise<ChannelInfo[]> {
 
     for (const ch of result.channels || []) {
       if (ch.id) {
+        const rawCh = ch as Record<string, unknown>;
+        const isIm = rawCh.is_im === true;
+        const isMpim = rawCh.is_mpim === true;
         channels.push({
           id: ch.id,
-          updated: (ch as Record<string, unknown>).updated as number || 0,
+          updated: rawCh.updated as number || 0,
+          type: isIm ? 'im' : isMpim ? 'mpim' : 'channel',
+          userId: isIm ? rawCh.user as string : undefined,
+          name: ch.name,
         });
         if (ch.name) channelCache.set(ch.id, ch.name);
       }
@@ -176,6 +186,89 @@ async function discoverChannels(client: WebClient): Promise<ChannelInfo[]> {
   // Sort by most recently updated first — poll active channels first
   channels.sort((a, b) => b.updated - a.updated);
   return channels;
+}
+
+async function listUsers(client: WebClient): Promise<Map<string, string>> {
+  const nameToId = new Map<string, string>();
+  let cursor: string | undefined;
+
+  do {
+    const result = await client.users.list({ limit: 200, cursor });
+    for (const user of result.members || []) {
+      if (user.id && !user.deleted && !user.is_bot) {
+        const name = (user.real_name || user.name || '').toLowerCase();
+        if (name) nameToId.set(name, user.id);
+        // Also map by username
+        if (user.name) nameToId.set(user.name.toLowerCase(), user.id);
+      }
+    }
+    cursor = result.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+
+  return nameToId;
+}
+
+async function resolveSlackScope(
+  client: WebClient,
+  scope: import('../scope.js').Scope,
+  channels: ChannelInfo[]
+): Promise<Set<string>> {
+  const scopedIds = new Set<string>();
+
+  // Resolve places → channel IDs
+  for (const place of scope.places) {
+    const match = channels.find(
+      ch => ch.type === 'channel' && ch.name?.toLowerCase() === place
+    );
+    if (match) {
+      scopedIds.add(match.id);
+    } else {
+      console.warn(`Scope: channel "${place}" not found`);
+    }
+  }
+
+  // Resolve people → DM channel IDs
+  if (scope.people.length > 0) {
+    const users = await listUsers(client);
+
+    for (const person of scope.people) {
+      const userId = users.get(person);
+      if (!userId) {
+        console.warn(`Scope: person "${person}" not found in workspace`);
+        continue;
+      }
+
+      // Find existing DM channel
+      const dm = channels.find(ch => ch.type === 'im' && ch.userId === userId);
+      if (dm) {
+        scopedIds.add(dm.id);
+      } else {
+        // Open a DM channel
+        try {
+          const result = await client.conversations.open({ users: userId });
+          if (result.channel?.id) {
+            scopedIds.add(result.channel.id);
+          }
+        } catch {
+          console.warn(`Scope: could not open DM with "${person}"`);
+        }
+      }
+
+      // Also include any MPIMs that include this person
+      for (const ch of channels) {
+        if (ch.type === 'mpim') {
+          try {
+            const info = await client.conversations.members({ channel: ch.id, limit: 100 });
+            if (info.members?.includes(userId)) {
+              scopedIds.add(ch.id);
+            }
+          } catch { /* skip */ }
+        }
+      }
+    }
+  }
+
+  return scopedIds;
 }
 
 async function pollChannel(
@@ -318,7 +411,17 @@ export async function startSlackAdapter(): Promise<void> {
   let channels = await discoverChannels(client);
   let lastChannelRefresh = Date.now();
 
-  console.log(`Found ${channels.length} channels/DMs to monitor`);
+  // Scope filtering
+  const scope = loadScope();
+  let scopedChannelIds: Set<string> | null = null;
+
+  if (scope) {
+    scopedChannelIds = await resolveSlackScope(client, scope, channels);
+    console.log(`Scope: ${scopedChannelIds.size} channel(s) in scope (${scope.places.length} places, ${scope.people.length} people)`);
+  } else {
+    console.log(`Found ${channels.length} channels/DMs to monitor (no scope set — polling all)`);
+  }
+
   console.log(`Polling every ${pollIntervalMs / 1000}s. Press Ctrl+C to stop.\n`);
 
   // Start batch processing timer
@@ -352,14 +455,18 @@ export async function startSlackAdapter(): Promise<void> {
       // Refresh channel list periodically
       if (Date.now() - lastChannelRefresh > channelRefreshMs) {
         channels = await discoverChannels(client);
+        if (scope) scopedChannelIds = await resolveSlackScope(client, scope, channels);
         lastChannelRefresh = Date.now();
       }
 
       let totalNew = 0;
 
-      // Rate limit safety: max 40 channels per cycle (under Tier 3's 50 req/min)
+      // Apply scope filter, then rate limit cap
+      const scopeFiltered = scopedChannelIds
+        ? channels.filter(ch => scopedChannelIds!.has(ch.id))
+        : channels;
       const maxPerCycle = parseInt(process.env.PACT_MAX_CHANNELS_PER_CYCLE || '40');
-      const channelsThisCycle = channels.slice(0, maxPerCycle);
+      const channelsThisCycle = scopeFiltered.slice(0, maxPerCycle);
 
       for (const channel of channelsThisCycle) {
         if (!running) break;
@@ -385,7 +492,8 @@ export async function startSlackAdapter(): Promise<void> {
 
     if (totalNew > 0) {
       const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
-      console.log(`[${time}] Poll cycle: ${totalNew} new message(s) with commitment signals from ${channelsThisCycle.length}/${channels.length} channels`);
+      const scopeLabel = scopedChannelIds ? `${channelsThisCycle.length} scoped` : `${channelsThisCycle.length}/${channels.length}`;
+      console.log(`[${time}] Poll cycle: ${totalNew} new message(s) with commitment signals from ${scopeLabel} channels`);
     }
 
     } catch (err) {

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { getDbPath, getWhoami, getPromptPath } from './utils.js';
 import { getDb } from './db.js';
 import { getTotalCount, getOverdueCount } from './queries.js';
+import { loadScope } from './scope.js';
 
 interface Check {
   name: string;
@@ -67,6 +68,21 @@ export function runDoctor(): Check[] {
       name: 'Identity',
       status: 'warn',
       detail: 'Not set. Run: pact whoami <name> or set PACT_USER',
+    });
+  }
+
+  // Scope
+  const scope = loadScope();
+  if (scope) {
+    const parts: string[] = [];
+    if (scope.places.length) parts.push(`${scope.places.length} channel(s)`);
+    if (scope.people.length) parts.push(`${scope.people.length} person(s)`);
+    checks.push({ name: 'Scope', status: 'ok', detail: parts.join(', ') });
+  } else {
+    checks.push({
+      name: 'Scope',
+      status: 'warn',
+      detail: 'Not set. Will poll ALL channels. Set PACT_SCOPE_CHANNELS or PACT_SCOPE_PEOPLE',
     });
   }
 
