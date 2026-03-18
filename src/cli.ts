@@ -1,14 +1,16 @@
 import { Command } from 'commander';
+import chalk from 'chalk';
 import type { Commitment } from './types.js';
 import { isInteractive, parseRelativeDate } from './utils.js';
 import { getDb } from './db.js';
 import { extractCommitments } from './extract.js';
-import { insertCommitment, resolveCommitment, snoozeCommitment, setWhoami, mergeIdentities, listIdentities } from './mutations.js';
+import { insertCommitment, resolveCommitment, snoozeCommitment, setWhoami, mergeIdentities, listIdentities, editCommitment } from './mutations.js';
 import { listCommitments, getCommitmentById, getOverdueCount, getAllCommitmentIds } from './queries.js';
 import { formatCommitmentTable, formatExtractResult, formatResolveResult, formatSnoozeResult } from './format.js';
 import { commitmentSchema, identitySchema } from './schemas.js';
 import { runDoctor, formatDoctorOutput } from './doctor.js';
 import { getWhoami, resolvePartialId } from './utils.js';
+import { getPersonStats, formatStats, formatPersonDetail, getDigest, formatDigest } from './stats.js';
 
 const program = new Command();
 
@@ -325,6 +327,99 @@ program
       await startMcpServer();
     } else {
       console.error('Specify a mode: --mcp');
+      process.exit(1);
+    }
+  });
+
+// stats (Phase 6)
+program
+  .command('stats')
+  .description('Accountability analytics per person')
+  .option('--who <name>', 'Show detail for a specific person')
+  .option('--json', 'JSON output')
+  .action((opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    const stats = getPersonStats(opts.who);
+
+    if (useJson) {
+      console.log(JSON.stringify(stats, null, 2));
+    } else if (opts.who && stats.length === 1) {
+      console.log(formatPersonDetail(stats[0]));
+    } else {
+      console.log(formatStats(stats));
+    }
+  });
+
+// digest (Phase 6)
+program
+  .command('digest')
+  .description('Summary report for a time period')
+  .option('--period <period>', 'day, week, or month', 'week')
+  .option('--json', 'JSON output')
+  .action((opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    const period = opts.period as 'day' | 'week' | 'month';
+    if (!['day', 'week', 'month'].includes(period)) {
+      console.error('Period must be: day, week, or month');
+      process.exit(1);
+    }
+
+    const data = getDigest(period);
+
+    if (useJson) {
+      console.log(JSON.stringify(data, null, 2));
+    } else {
+      console.log(formatDigest(data));
+    }
+  });
+
+// edit
+program
+  .command('edit <id>')
+  .description('Edit a commitment')
+  .option('--what <text>', 'Update the commitment text')
+  .option('--deadline <date>', 'Update deadline (ISO date or relative: tomorrow, friday, +3d)')
+  .option('--who <name>', 'Update who made the commitment')
+  .option('--json', 'JSON output')
+  .action((id, opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    if (!opts.what && !opts.deadline && !opts.who) {
+      console.error('Specify at least one field to edit: --what, --deadline, --who');
+      process.exit(1);
+    }
+
+    const allIds = getAllCommitmentIds();
+    const fullId = resolvePartialId(allIds, id) || id;
+
+    const updates: Record<string, string> = {};
+    if (opts.what) updates.what = opts.what;
+    if (opts.deadline) {
+      const parsed = parseRelativeDate(opts.deadline);
+      if (!parsed) {
+        console.error(`Cannot parse date: ${opts.deadline}`);
+        process.exit(1);
+      }
+      updates.deadline = parsed;
+    }
+
+    try {
+      const result = editCommitment(fullId, updates, opts.who);
+      if (useJson) {
+        console.log(JSON.stringify(result));
+      } else {
+        console.log(`${chalk.green('✓')} Updated ${chalk.cyan(fullId.substring(0, 8))}`);
+        if (opts.what) console.log(`  What: ${opts.what}`);
+        if (opts.deadline) console.log(`  Deadline: ${updates.deadline}`);
+        if (opts.who) console.log(`  Who: ${opts.who}`);
+      }
+    } catch (err) {
+      console.error((err as Error).message);
       process.exit(1);
     }
   });

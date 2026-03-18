@@ -216,3 +216,47 @@ export function markEscalated(id: string): void {
     WHERE id = ?
   `).run(timestamp, timestamp, id);
 }
+
+export function editCommitment(
+  id: string,
+  updates: Record<string, string>,
+  who?: string,
+): Commitment {
+  const db = getDb();
+  const timestamp = now();
+
+  const existing = db.prepare(`
+    SELECT c.*, i.display_name as who_name
+    FROM commitments c JOIN identities i ON c.who_id = i.id
+    WHERE c.id = ?
+  `).get(id) as Commitment | undefined;
+
+  if (!existing) throw new Error(`Commitment not found: ${id}`);
+
+  const setClauses: string[] = ['updated_at = ?'];
+  const params: string[] = [timestamp];
+
+  if (updates.what) {
+    setClauses.push('what = ?');
+    params.push(updates.what);
+  }
+  if (updates.deadline) {
+    setClauses.push('deadline = ?');
+    params.push(updates.deadline);
+  }
+  if (who) {
+    const identity = resolveIdentity(who, 'name');
+    setClauses.push('who_id = ?');
+    params.push(identity.id);
+  }
+
+  params.push(id);
+  db.prepare(`UPDATE commitments SET ${setClauses.join(', ')} WHERE id = ?`).run(...params);
+
+  return {
+    ...existing,
+    what: updates.what || existing.what,
+    deadline: updates.deadline || existing.deadline,
+    updated_at: timestamp,
+  };
+}
