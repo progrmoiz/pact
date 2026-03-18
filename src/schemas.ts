@@ -1,0 +1,43 @@
+export const commitmentSchema = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  title: 'Commitment',
+  type: 'object',
+  properties: {
+    id: { type: 'string', description: 'ULID identifier' },
+    who_id: { type: 'string', description: 'Identity ID of the person who committed' },
+    who_name: { type: 'string', description: 'Display name of the committer' },
+    to_whom_id: { type: ['string', 'null'], description: 'Identity ID of the person promised to' },
+    to_whom_name: { type: ['string', 'null'], description: 'Display name of the promisee' },
+    what: { type: 'string', description: 'Normalized commitment text' },
+    raw_text: { type: 'string', description: 'Original extracted text' },
+    deadline: { type: ['string', 'null'], description: 'ISO8601 deadline' },
+    confidence: { type: 'number', minimum: 0, maximum: 1, description: 'LLM confidence score' },
+    status: { type: 'string', enum: ['active', 'done', 'cancelled'] },
+    source_platform: { type: 'string', description: 'Platform: stdin, slack, etc.' },
+    source_channel: { type: ['string', 'null'] },
+    source_message_id: { type: ['string', 'null'] },
+    source_url: { type: ['string', 'null'] },
+    resolved_at: { type: ['string', 'null'], description: 'ISO8601 resolution timestamp' },
+    resolution_note: { type: ['string', 'null'] },
+    nudge_count: { type: 'integer', minimum: 0 },
+    last_nudged_at: { type: ['string', 'null'] },
+    escalated: { type: 'integer', enum: [0, 1] },
+    escalated_at: { type: ['string', 'null'] },
+    created_at: { type: 'string', description: 'ISO8601' },
+    updated_at: { type: 'string', description: 'ISO8601' },
+  },
+  required: ['id', 'who_id', 'what', 'raw_text', 'confidence', 'status', 'source_platform', 'created_at', 'updated_at'],
+};
+
+export const identitySchema = {
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
+  title: 'Identity',
+  type: 'object',
+  properties: {
+    id: { type: 'string', description: 'ULID identifier' },
+    display_name: { type: 'string' },
+    created_at: { type: 'string', description: 'ISO8601' },
+    updated_at: { type: 'string', description: 'ISO8601' },
+  },
+  required: ['id', 'display_name', 'created_at', 'updated_at'],
+};
