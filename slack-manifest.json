@@ -19,13 +19,23 @@
         "groups:read",
         "im:history",
         "im:read",
+        "im:write",
         "mpim:history",
         "mpim:read",
+        "chat:write",
         "users:read"
       ],
       "bot": [
-        "chat:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "im:history",
+        "im:read",
         "im:write",
+        "mpim:history",
+        "mpim:read",
+        "chat:write",
         "users:read"
       ]
     }
@@ -33,6 +43,12 @@
   "settings": {
     "event_subscriptions": {
       "user_events": [
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim"
+      ],
+      "bot_events": [
         "message.channels",
         "message.groups",
         "message.im",

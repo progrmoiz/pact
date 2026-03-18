@@ -3,7 +3,7 @@ import type { Commitment } from './types.js';
 import { isInteractive, parseRelativeDate } from './utils.js';
 import { getDb } from './db.js';
 import { extractCommitments } from './extract.js';
-import { insertCommitment, resolveCommitment, snoozeCommitment, setWhoami } from './mutations.js';
+import { insertCommitment, resolveCommitment, snoozeCommitment, setWhoami, mergeIdentities, listIdentities } from './mutations.js';
 import { listCommitments, getCommitmentById, getOverdueCount, getAllCommitmentIds } from './queries.js';
 import { formatCommitmentTable, formatExtractResult, formatResolveResult, formatSnoozeResult } from './format.js';
 import { commitmentSchema, identitySchema } from './schemas.js';
@@ -325,6 +325,63 @@ program
       await startMcpServer();
     } else {
       console.error('Specify a mode: --mcp');
+      process.exit(1);
+    }
+  });
+
+// identities
+const identitiesCmd = program
+  .command('identities')
+  .description('Manage identities');
+
+identitiesCmd
+  .command('list')
+  .description('List all identities and their aliases')
+  .option('--json', 'JSON output')
+  .action((opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+    const identities = listIdentities();
+
+    if (useJson) {
+      console.log(JSON.stringify(identities, null, 2));
+    } else {
+      if (identities.length === 0) {
+        console.log('No identities found.');
+        return;
+      }
+      for (const i of identities) {
+        const aliases = i.aliases.map(a => `${a.platform}:${a.handle}`).join(', ');
+        console.log(`  ${i.id.substring(0, 8)}  ${i.display_name}  [${aliases}]`);
+      }
+      console.log(`\n${identities.length} identity(ies)`);
+    }
+  });
+
+identitiesCmd
+  .command('merge <keep-id> <merge-id>')
+  .description('Merge two identities. Keeps first, absorbs second.')
+  .option('--json', 'JSON output')
+  .action((keepId, mergeId, opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    // Resolve partial IDs against identity table
+    const identities = listIdentities();
+    const allIds = identities.map(i => i.id);
+    const resolvedKeep = resolvePartialId(allIds, keepId) || keepId;
+    const resolvedMerge = resolvePartialId(allIds, mergeId) || mergeId;
+
+    try {
+      const result = mergeIdentities(resolvedKeep, resolvedMerge);
+      if (useJson) {
+        console.log(JSON.stringify({ keep: resolvedKeep, absorbed: resolvedMerge, commitments_moved: result.merged, aliases_moved: result.aliases }));
+      } else {
+        console.log(`Merged ${resolvedMerge.substring(0, 8)} into ${resolvedKeep.substring(0, 8)}`);
+        console.log(`  ${result.merged} commitment(s) moved, ${result.aliases} alias(es) absorbed`);
+      }
+    } catch (err) {
+      console.error((err as Error).message);
       process.exit(1);
     }
   });

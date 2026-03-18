@@ -104,9 +104,9 @@ export function parseRelativeDate(input: string): string | null {
 }
 
 export function parseDuration(str: string): number {
-  const match = str.match(/^(\d+)(m|h|d)$/);
-  if (!match) throw new Error(`Invalid duration: ${str}. Use format: 4h, 30m, 1d`);
+  const match = str.match(/^(\d+)(s|m|h|d)$/);
+  if (!match) throw new Error(`Invalid duration: ${str}. Use format: 0s, 30m, 4h, 1d`);
   const [, n, unit] = match;
-  const multipliers: Record<string, number> = { m: 60000, h: 3600000, d: 86400000 };
+  const multipliers: Record<string, number> = { s: 1000, m: 60000, h: 3600000, d: 86400000 };
   return parseInt(n) * multipliers[unit];
 }

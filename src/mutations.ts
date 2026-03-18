@@ -24,15 +24,16 @@ export function insertCommitment(data: {
   source_channel?: string | null;
   source_message_id?: string | null;
   source_url?: string | null;
+  participant_map?: Map<string, string>;  // display_name → platform_user_id
 }): Commitment | null {
   const db = getDb();
   const id = genId();
   const timestamp = now();
 
-  const whoIdentity = resolveIdentity(data.who, data.source_platform);
+  const whoIdentity = resolveIdentity(data.who, data.source_platform, data.participant_map);
   let toWhomIdentity: Identity | null = null;
   if (data.to_whom) {
-    toWhomIdentity = resolveIdentity(data.to_whom, data.source_platform);
+    toWhomIdentity = resolveIdentity(data.to_whom, data.source_platform, data.participant_map);
   }
 
   // Layer 1: Content-level dedup — same person, same action, same channel = duplicate
@@ -128,6 +129,69 @@ export function snoozeCommitment(id: string, newDeadline: string): Commitment {
   `).run(newDeadline, timestamp, id);
 
   return { ...existing, deadline: newDeadline, updated_at: timestamp };
+}
+
+export function mergeIdentities(keepId: string, mergeId: string): { merged: number; aliases: number } {
+  const db = getDb();
+  const timestamp = now();
+
+  const keep = db.prepare('SELECT * FROM identities WHERE id = ?').get(keepId) as Identity | undefined;
+  const merge = db.prepare('SELECT * FROM identities WHERE id = ?').get(mergeId) as Identity | undefined;
+
+  if (!keep) throw new Error(`Identity not found: ${keepId}`);
+  if (!merge) throw new Error(`Identity not found: ${mergeId}`);
+  if (keepId === mergeId) throw new Error('Cannot merge an identity with itself');
+
+  let commitmentsMoved = 0;
+  let aliasesMoved = 0;
+
+  db.transaction(() => {
+    // Move all commitments from merge → keep
+    const whoResult = db.prepare('UPDATE commitments SET who_id = ?, updated_at = ? WHERE who_id = ?')
+      .run(keepId, timestamp, mergeId);
+    const toWhomResult = db.prepare('UPDATE commitments SET to_whom_id = ?, updated_at = ? WHERE to_whom_id = ?')
+      .run(keepId, timestamp, mergeId);
+    commitmentsMoved = whoResult.changes + toWhomResult.changes;
+
+    // Move aliases — skip any that would conflict (same platform+handle already on keep)
+    const mergeAliases = db.prepare('SELECT platform, handle FROM identity_aliases WHERE identity_id = ?')
+      .all(mergeId) as { platform: string; handle: string }[];
+
+    for (const alias of mergeAliases) {
+      const existing = db.prepare(
+        'SELECT 1 FROM identity_aliases WHERE platform = ? AND handle = ?'
+      ).get(alias.platform, alias.handle) as unknown;
+
+      // If this exact alias belongs to the merge identity, reassign it
+      db.prepare(
+        'DELETE FROM identity_aliases WHERE identity_id = ? AND platform = ? AND handle = ?'
+      ).run(mergeId, alias.platform, alias.handle);
+
+      if (!existing || existing) {
+        // Insert under keep (ignore if duplicate)
+        db.prepare(
+          'INSERT OR IGNORE INTO identity_aliases (identity_id, platform, handle, created_at) VALUES (?, ?, ?, ?)'
+        ).run(keepId, alias.platform, alias.handle, timestamp);
+        aliasesMoved++;
+      }
+    }
+
+    // Delete the merged identity
+    db.prepare('DELETE FROM identities WHERE id = ?').run(mergeId);
+  })();
+
+  return { merged: commitmentsMoved, aliases: aliasesMoved };
+}
+
+export function listIdentities(): (Identity & { aliases: { platform: string; handle: string }[] })[] {
+  const db = getDb();
+  const identities = db.prepare('SELECT * FROM identities ORDER BY display_name').all() as Identity[];
+  return identities.map(i => {
+    const aliases = db.prepare(
+      'SELECT platform, handle FROM identity_aliases WHERE identity_id = ? ORDER BY platform'
+    ).all(i.id) as { platform: string; handle: string }[];
+    return { ...i, aliases };
+  });
 }
 
 export function setWhoami(name: string): Identity {

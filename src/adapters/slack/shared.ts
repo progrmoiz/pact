@@ -107,23 +107,60 @@ export async function discoverChannels(client: WebClient): Promise<ChannelInfo[]
   return channels;
 }
 
-export async function listUsers(client: WebClient): Promise<Map<string, string>> {
-  const nameToId = new Map<string, string>();
+interface SlackUser {
+  id: string;
+  username: string;
+  realName: string;
+}
+
+export async function listUsers(client: WebClient): Promise<SlackUser[]> {
+  const users: SlackUser[] = [];
   let cursor: string | undefined;
 
   do {
     const result = await client.users.list({ limit: 200, cursor });
     for (const user of result.members || []) {
       if (user.id && !user.deleted && !user.is_bot) {
-        const name = (user.real_name || user.name || '').toLowerCase();
-        if (name) nameToId.set(name, user.id);
-        if (user.name) nameToId.set(user.name.toLowerCase(), user.id);
+        users.push({
+          id: user.id,
+          username: (user.name || '').toLowerCase(),
+          realName: (user.real_name || '').toLowerCase(),
+        });
       }
     }
     cursor = result.response_metadata?.next_cursor || undefined;
   } while (cursor);
 
-  return nameToId;
+  return users;
+}
+
+function findUser(users: SlackUser[], query: string): string | undefined {
+  // Tier 1: exact match on username or full real_name
+  const exact = users.filter(
+    u => u.username === query || u.realName === query
+  );
+  if (exact.length === 1) return exact[0].id;
+
+  // Tier 2: token match — query matches any word in real_name
+  const token = users.filter(
+    u => u.realName.split(' ').includes(query)
+  );
+  if (token.length === 1) return token[0].id;
+
+  // Tier 3: substring match on username or real_name
+  const substring = users.filter(
+    u => u.username.includes(query) || u.realName.includes(query)
+  );
+  if (substring.length === 1) return substring[0].id;
+
+  // Ambiguous — warn with candidates
+  const allMatches = [...new Map([...exact, ...token, ...substring].map(u => [u.id, u])).values()];
+  if (allMatches.length > 1) {
+    console.warn(
+      `Scope: "${query}" matches multiple users: ${allMatches.map(u => `${u.realName} (@${u.username})`).join(', ')}. Be more specific.`
+    );
+  }
+  return undefined;
 }
 
 export async function resolveSlackScope(
@@ -150,7 +187,7 @@ export async function resolveSlackScope(
     const users = await listUsers(client);
 
     for (const person of scope.people) {
-      const userId = users.get(person);
+      const userId = findUser(users, person);
       if (!userId) {
         console.warn(`Scope: person "${person}" not found in workspace`);
         continue;
@@ -201,6 +238,12 @@ export async function processBatches(batches: MessageBatch[], client: WebClient)
         participantIds.map(id => resolveUsername(client, id))
       );
 
+      // Build name → platform_user_id map so identity system stores Slack user IDs, not display names
+      const participantMap = new Map<string, string>();
+      for (let i = 0; i < participantIds.length; i++) {
+        participantMap.set(participantNames[i], participantIds[i]);
+      }
+
       const results = await extractCommitments(combinedText, {
         participants: participantNames,
         channel: batch.channel,
@@ -221,6 +264,7 @@ export async function processBatches(batches: MessageBatch[], client: WebClient)
             source_channel: batch.channel ? `#${batch.channel}` : undefined,
             source_message_id: batchMessageId,
             source_url: batch.messages[0].source.url,
+            participant_map: participantMap,
           });
           if (commitment) newCount++;
         }
