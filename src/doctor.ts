@@ -5,6 +5,7 @@ import { getDbPath, getWhoami, getPromptPath } from './utils.js';
 import { getDb } from './db.js';
 import { getTotalCount, getOverdueCount } from './queries.js';
 import { loadScope } from './scope.js';
+import { detectSlackTokens } from './adapters/slack/types.js';
 
 interface Check {
   name: string;
@@ -84,6 +85,18 @@ export function runDoctor(): Check[] {
       status: 'warn',
       detail: 'Not set. Will poll ALL channels. Set PACT_SCOPE_CHANNELS or PACT_SCOPE_PEOPLE',
     });
+  }
+
+  // Slack tokens
+  const slackTokens = detectSlackTokens();
+  if (slackTokens) {
+    if (slackTokens.mode === 'team') {
+      checks.push({ name: 'Slack', status: 'ok', detail: `Team mode (bot token + app token → Socket Mode events)` });
+    } else {
+      checks.push({ name: 'Slack', status: 'ok', detail: `Solo mode (user token → polling)` });
+    }
+  } else {
+    checks.push({ name: 'Slack', status: 'warn', detail: 'No Slack tokens. Set PACT_SLACK_USER_TOKEN (solo) or PACT_SLACK_BOT_TOKEN + PACT_SLACK_APP_TOKEN (team)' });
   }
 
   // Agent detection

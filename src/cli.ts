@@ -271,7 +271,7 @@ program
       process.exit(1);
     }
     if (opts.slack) {
-      const { startSlackAdapter } = await import('./adapters/slack.js');
+      const { startSlackAdapter } = await import('./adapters/slack/index.js');
       await startSlackAdapter();
     }
   });

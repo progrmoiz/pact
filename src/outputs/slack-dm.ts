@@ -1,10 +1,9 @@
 import type { App } from '@slack/bolt';
 import type { NudgeCandidate } from '../types.js';
 import { resolveCommitment, snoozeCommitment } from '../mutations.js';
-import { now } from '../utils.js';
+import { getSlackSendToken } from '../adapters/slack/types.js';
 
 export async function sendSlackDM(
-  botToken: string,
   candidate: NudgeCandidate,
   message: string
 ): Promise<void> {
@@ -13,9 +12,14 @@ export async function sendSlackDM(
     return;
   }
 
-  // Dynamic import to avoid requiring @slack/web-api when not using Slack
+  const sendToken = getSlackSendToken();
+  if (!sendToken) {
+    console.error('No Slack token available for sending DMs. Set PACT_SLACK_BOT_TOKEN or PACT_SLACK_USER_TOKEN.');
+    return;
+  }
+
   const { WebClient } = await import('@slack/web-api');
-  const client = new WebClient(botToken);
+  const client = new WebClient(sendToken.token);
 
   // Open DM channel
   const dm = await client.conversations.open({ users: candidate.who_slack_id });
@@ -24,38 +28,56 @@ export async function sendSlackDM(
     return;
   }
 
-  await client.chat.postMessage({
-    channel: dm.channel.id,
-    text: message,
-    blocks: [
-      {
-        type: 'section',
-        text: { type: 'mrkdwn', text: message },
-      },
-      {
-        type: 'actions',
-        elements: [
-          {
-            type: 'button',
-            text: { type: 'plain_text', text: 'Done' },
-            style: 'primary',
-            action_id: `pact_done_${candidate.id}`,
-          },
-          {
-            type: 'button',
-            text: { type: 'plain_text', text: 'Snooze 3d' },
-            action_id: `pact_snooze_${candidate.id}`,
-          },
-          {
-            type: 'button',
-            text: { type: 'plain_text', text: 'Cancel' },
-            style: 'danger',
-            action_id: `pact_cancel_${candidate.id}`,
-          },
-        ],
-      },
-    ],
-  });
+  // Bot token: send with interactive buttons (Bolt app handles clicks)
+  // User token: send plain text only (no Bolt app = buttons are dead)
+  if (sendToken.isBot) {
+    await client.chat.postMessage({
+      channel: dm.channel.id,
+      text: message,
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: message },
+        },
+        {
+          type: 'actions',
+          elements: [
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Done' },
+              style: 'primary',
+              action_id: `pact_done_${candidate.id}`,
+            },
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Snooze 3d' },
+              action_id: `pact_snooze_${candidate.id}`,
+            },
+            {
+              type: 'button',
+              text: { type: 'plain_text', text: 'Cancel' },
+              style: 'danger',
+              action_id: `pact_cancel_${candidate.id}`,
+            },
+          ],
+        },
+      ],
+    });
+  } else {
+    // User token: plain text, no buttons
+    // Append CLI instructions since buttons won't work
+    const withInstructions = `${message}\n\n_Resolve via CLI: \`pact resolve ${candidate.id.substring(0, 8)}\` or \`pact snooze ${candidate.id.substring(0, 8)} --days 3\`_`;
+    await client.chat.postMessage({
+      channel: dm.channel.id,
+      text: withInstructions,
+      blocks: [
+        {
+          type: 'section',
+          text: { type: 'mrkdwn', text: withInstructions },
+        },
+      ],
+    });
+  }
 }
 
 export function registerSlackActions(app: App): void {

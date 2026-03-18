@@ -39,13 +39,14 @@ export async function runFollowUp(config: FollowUpConfig): Promise<{ nudged: num
     if (config.via === 'stdout') {
       sendStdoutNudge(candidate, message);
     } else if (config.via === 'slack-dm') {
-      const botToken = process.env.PACT_SLACK_BOT_TOKEN;
-      if (!botToken) {
-        console.error('PACT_SLACK_BOT_TOKEN not set. Cannot send Slack DMs.');
+      const { getSlackSendToken } = await import('./adapters/slack/types.js');
+      const sendToken = getSlackSendToken();
+      if (!sendToken) {
+        console.error('No Slack token set. Set PACT_SLACK_BOT_TOKEN (team) or PACT_SLACK_USER_TOKEN (solo).');
         process.exit(1);
       }
       const { sendSlackDM } = await import('./outputs/slack-dm.js');
-      await sendSlackDM(botToken, candidate, message);
+      await sendSlackDM(candidate, message);
     }
 
     incrementNudge(candidate.id);
