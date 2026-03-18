@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS commitments (
   last_nudged_at TEXT,
   escalated INTEGER NOT NULL DEFAULT 0,
   escalated_at TEXT,
+  content_hash TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -49,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_commitments_who ON commitments(who_id);
 CREATE INDEX IF NOT EXISTS idx_commitments_deadline ON commitments(deadline);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_commitments_dedup ON commitments(source_platform, source_message_id) WHERE source_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_commitments_source ON commitments(source_platform, source_channel);
+CREATE INDEX IF NOT EXISTS idx_commitments_content_hash ON commitments(who_id, content_hash) WHERE status = 'active';
 `;
 
 const MIGRATIONS = [MIGRATION_001];

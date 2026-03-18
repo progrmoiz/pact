@@ -7,7 +7,7 @@ export interface MessageBatch {
   windowStart: Date;
 }
 
-const BATCH_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const BATCH_WINDOW_MS = parseInt(process.env.PACT_BATCH_WINDOW_MS || '300000'); // default 5 min, env override
 
 const batches = new Map<string, {
   messages: AdapterOutput[];

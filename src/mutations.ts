@@ -1,7 +1,17 @@
+import { createHash } from 'crypto';
 import { getDb } from './db.js';
 import { genId, now, setWhoamiFile } from './utils.js';
 import { resolveIdentity } from './identity.js';
 import type { Commitment, Identity } from './types.js';
+
+export type InsertResult = { commitment: Commitment; status: 'new' | 'duplicate' };
+
+function contentHash(who: string, what: string, channel: string | null): string {
+  return createHash('sha256')
+    .update(`${who}::${what.toLowerCase().trim()}::${channel || ''}`)
+    .digest('hex')
+    .substring(0, 16);
+}
 
 export function insertCommitment(data: {
   who: string | null;
@@ -14,7 +24,7 @@ export function insertCommitment(data: {
   source_channel?: string | null;
   source_message_id?: string | null;
   source_url?: string | null;
-}): Commitment {
+}): Commitment | null {
   const db = getDb();
   const id = genId();
   const timestamp = now();
@@ -25,18 +35,28 @@ export function insertCommitment(data: {
     toWhomIdentity = resolveIdentity(data.to_whom, data.source_platform);
   }
 
+  // Layer 1: Content-level dedup — same person, same action, same channel = duplicate
+  const hash = contentHash(whoIdentity.display_name, data.what, data.source_channel || null);
+  const existing = db.prepare(`
+    SELECT id FROM commitments
+    WHERE who_id = ? AND status = 'active' AND content_hash = ?
+  `).get(whoIdentity.id, hash) as { id: string } | undefined;
+
+  if (existing) return null; // Duplicate — silently skip
+
+  // Layer 2: Message-level dedup (source_platform + source_message_id unique index)
   db.prepare(`
-    INSERT INTO commitments (
+    INSERT OR IGNORE INTO commitments (
       id, who_id, to_whom_id, what, raw_text, deadline, confidence,
       status, source_platform, source_channel, source_message_id, source_url,
-      nudge_count, escalated, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, 0, 0, ?, ?)
+      content_hash, nudge_count, escalated, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, 0, 0, ?, ?)
   `).run(
     id, whoIdentity.id, toWhomIdentity?.id || null,
     data.what, data.raw_text, data.deadline, data.confidence,
     data.source_platform, data.source_channel || null,
     data.source_message_id || null, data.source_url || null,
-    timestamp, timestamp
+    hash, timestamp, timestamp
   );
 
   return {

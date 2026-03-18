@@ -114,7 +114,7 @@ export async function startMcpServer(): Promise<void> {
               source_platform: (args?.source as string) || 'mcp',
               source_channel: args?.channel as string | undefined,
             })
-          );
+          ).filter(c => c !== null);
           return { content: [{ type: 'text', text: JSON.stringify(stored, null, 2) }] };
         }
 

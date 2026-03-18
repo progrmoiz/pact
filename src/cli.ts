@@ -1,4 +1,5 @@
 import { Command } from 'commander';
+import type { Commitment } from './types.js';
 import { isInteractive, parseRelativeDate } from './utils.js';
 import { getDb } from './db.js';
 import { extractCommitments } from './extract.js';
@@ -93,7 +94,7 @@ program
         source_platform: opts.source,
         source_channel: opts.channel,
       })
-    );
+    ).filter((c): c is Commitment => c !== null);
 
     if (useJson) {
       console.log(JSON.stringify({ commitments: stored, count: stored.length }));
@@ -263,7 +264,7 @@ program
 program
   .command('ingest')
   .description('Start live platform monitoring')
-  .option('--slack', 'Connect to Slack via Socket Mode')
+  .option('--slack', 'Connect to Slack via polling')
   .action(async (opts) => {
     if (!opts.slack) {
       console.error('Specify an adapter: --slack');
