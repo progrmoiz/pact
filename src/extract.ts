@@ -3,7 +3,12 @@ import { readFileSync } from 'fs';
 import { getPromptPath, getWhoami } from './utils.js';
 import type { ExtractionResult } from './types.js';
 
-export async function extractCommitments(text: string): Promise<ExtractionResult[]> {
+export interface ExtractionContext {
+  participants?: string[];  // Names of people in the conversation
+  channel?: string;         // Channel name for context
+}
+
+export async function extractCommitments(text: string, context?: ExtractionContext): Promise<ExtractionResult[]> {
   const apiKey = process.env.PACT_LLM_API_KEY;
   if (!apiKey) {
     throw new Error('PACT_LLM_API_KEY not set. Get one at https://console.anthropic.com/');
@@ -16,10 +21,12 @@ export async function extractCommitments(text: string): Promise<ExtractionResult
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const whoami = getWhoami() || 'Unknown';
 
-  const systemPrompt = promptTemplate
+  let systemPrompt = promptTemplate
     .replace(/\{\{CURRENT_DATE\}\}/g, currentDate)
     .replace(/\{\{CURRENT_TIMEZONE\}\}/g, timezone)
-    .replace(/\{\{PACT_USER\}\}/g, whoami);
+    .replace(/\{\{PACT_USER\}\}/g, whoami)
+    .replace(/\{\{PARTICIPANTS\}\}/g, context?.participants?.join(', ') || 'Unknown')
+    .replace(/\{\{CHANNEL\}\}/g, context?.channel || 'stdin');
 
   const client = new Anthropic({ apiKey });
 

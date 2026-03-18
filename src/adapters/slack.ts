@@ -92,13 +92,25 @@ async function stripSlackFormatting(text: string, client: WebClient): Promise<st
   return result;
 }
 
+let slackClient: WebClient | null = null;
+
 async function processBatches(batches: MessageBatch[]): Promise<void> {
+  const client = slackClient!;
   for (const batch of batches) {
     const combinedText = batch.messages.map(m => m.text).join('\n\n');
     const time = new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false });
 
     try {
-      const results = await extractCommitments(combinedText);
+      // Collect unique participant names for context
+      const participantIds = [...new Set(batch.messages.flatMap(m => m.participants))];
+      const participantNames = await Promise.all(
+        participantIds.map(id => resolveUsername(client, id))
+      );
+
+      const results = await extractCommitments(combinedText, {
+        participants: participantNames,
+        channel: batch.channel,
+      });
 
       if (results.length > 0) {
         const batchMessageId = batch.messages.map(m => m.source.messageId).join(',');
@@ -284,6 +296,7 @@ export async function startSlackAdapter(): Promise<void> {
   // Initialize
   getDb();
   const client = new WebClient(token);
+  slackClient = client;
 
   // Verify auth
   const auth = await client.auth.test();
