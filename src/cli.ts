@@ -134,6 +134,111 @@ program
     }
   });
 
+// add (quick-add commitment without LLM)
+program
+  .command('add <text>')
+  .description('Quick-add a commitment (no LLM extraction)')
+  .option('--deadline <date>', 'Deadline (ISO date, or: tomorrow, friday, +3d)')
+  .option('--to <name>', 'Who you promised this to')
+  .option('--json', 'JSON output')
+  .action((text, opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    let deadline: string | null = null;
+    if (opts.deadline) {
+      deadline = parseRelativeDate(opts.deadline);
+      if (!deadline) {
+        console.error(`Cannot parse date: ${opts.deadline}`);
+        process.exit(1);
+      }
+    }
+
+    const commitment = insertCommitment({
+      who: getWhoami(),
+      to_whom: opts.to || null,
+      what: text,
+      raw_text: text,
+      deadline,
+      confidence: 1.0,
+      source_platform: 'manual',
+      source_channel: null,
+    });
+
+    if (!commitment) {
+      console.error('Duplicate commitment — already exists.');
+      process.exit(1);
+    }
+
+    if (useJson) {
+      console.log(JSON.stringify(commitment, null, 2));
+    } else {
+      console.log(`${chalk.green('✓')} Added: ${chalk.bold(text)}`);
+      if (deadline) console.log(`  Deadline: ${deadline}`);
+      if (opts.to) console.log(`  To: ${opts.to}`);
+    }
+  });
+
+// remind (future reminder — commitment with a deadline, no "who")
+program
+  .command('remind <text>')
+  .description('Set a future reminder')
+  .option('--in <duration>', 'When to remind (e.g., 3d, 4h, 1w)')
+  .option('--on <date>', 'Specific date (ISO or relative: tomorrow, friday)')
+  .option('--json', 'JSON output')
+  .action((text, opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    if (!opts.in && !opts.on) {
+      console.error('Specify when: --in 3d or --on friday');
+      process.exit(1);
+    }
+
+    let deadline: string;
+    if (opts.in) {
+      const match = opts.in.match(/^(\d+)(h|d|w)$/);
+      if (!match) {
+        console.error(`Cannot parse duration: ${opts.in}. Use: 3d, 4h, 1w`);
+        process.exit(1);
+      }
+      const [, n, unit] = match;
+      const ms = parseInt(n) * ({ h: 3600000, d: 86400000, w: 604800000 } as Record<string, number>)[unit];
+      deadline = new Date(Date.now() + ms).toISOString();
+    } else {
+      const parsed = parseRelativeDate(opts.on);
+      if (!parsed) {
+        console.error(`Cannot parse date: ${opts.on}`);
+        process.exit(1);
+      }
+      deadline = parsed;
+    }
+
+    const commitment = insertCommitment({
+      who: getWhoami(),
+      to_whom: null,
+      what: text,
+      raw_text: `Reminder: ${text}`,
+      deadline,
+      confidence: 1.0,
+      source_platform: 'manual',
+      source_channel: null,
+    });
+
+    if (!commitment) {
+      console.error('Duplicate reminder — already exists.');
+      process.exit(1);
+    }
+
+    if (useJson) {
+      console.log(JSON.stringify(commitment, null, 2));
+    } else {
+      const d = new Date(deadline);
+      console.log(`${chalk.blue('⏰')} Reminder set: ${chalk.bold(text)}`);
+      console.log(`  When: ${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}`);
+    }
+  });
+
 // extract
 program
   .command('extract')
