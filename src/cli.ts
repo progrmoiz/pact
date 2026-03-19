@@ -125,8 +125,18 @@ program
         console.error('GitHub scan requires PACT_GITHUB_TOKEN');
         process.exit(1);
       }
-      // GitHub scanner — Phase 3
-      console.log('GitHub scanner not yet implemented. Coming soon.');
+
+      const { GitHubScanner } = await import('./adapters/github/scanner.js');
+      const scanner = new GitHubScanner(process.env.PACT_GITHUB_TOKEN);
+
+      if (!useJson) process.stdout.write('Scanning GitHub...');
+      const loops = await scanner.scan();
+
+      const { upserted } = upsertOpenLoops(loops);
+      const purged = purgeStaleLoops('github', scanTimestamp);
+
+      results.push({ platform: 'github', found: loops.length, purged });
+      if (!useJson) console.log(` ${loops.length} open loop${loops.length !== 1 ? 's' : ''} (${purged} resolved)`);
     }
 
     if (useJson) {
