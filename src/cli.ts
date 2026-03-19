@@ -72,6 +72,68 @@ program
     }
   });
 
+// scan (run open loop scanners)
+program
+  .command('scan')
+  .description('Scan platforms for open loops')
+  .option('--slack', 'Scan Slack for unreplied DMs and mentions')
+  .option('--github', 'Scan GitHub for PR reviews and assigned issues')
+  .option('--json', 'JSON output')
+  .action(async (opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    if (!opts.slack && !opts.github) {
+      // Auto-detect: scan all configured platforms
+      opts.slack = !!(process.env.PACT_SLACK_USER_TOKEN || process.env.PACT_SLACK_BOT_TOKEN);
+      opts.github = !!process.env.PACT_GITHUB_TOKEN;
+
+      if (!opts.slack && !opts.github) {
+        console.error('No platforms configured. Set PACT_SLACK_USER_TOKEN or PACT_GITHUB_TOKEN.');
+        process.exit(1);
+      }
+    }
+
+    const { upsertOpenLoops, purgeStaleLoops } = await import('./open-loops.js');
+    const { now } = await import('./utils.js');
+    const scanTimestamp = now();
+    const results: { platform: string; found: number; purged: number }[] = [];
+
+    if (opts.slack) {
+      const token = process.env.PACT_SLACK_USER_TOKEN || process.env.PACT_SLACK_BOT_TOKEN;
+      if (!token) {
+        console.error('Slack scan requires PACT_SLACK_USER_TOKEN or PACT_SLACK_BOT_TOKEN');
+        process.exit(1);
+      }
+
+      const { SlackScanner } = await import('./adapters/slack/scanner.js');
+      const scanner = new SlackScanner(token);
+
+      if (!useJson) process.stdout.write('Scanning Slack...');
+      const loops = await scanner.scan();
+
+      // Recompute urgency for each loop (in case thresholds changed)
+      const { upserted } = upsertOpenLoops(loops);
+      const purged = purgeStaleLoops('slack', scanTimestamp);
+
+      results.push({ platform: 'slack', found: loops.length, purged });
+      if (!useJson) console.log(` ${loops.length} open loop${loops.length !== 1 ? 's' : ''} (${purged} resolved)`);
+    }
+
+    if (opts.github) {
+      if (!process.env.PACT_GITHUB_TOKEN) {
+        console.error('GitHub scan requires PACT_GITHUB_TOKEN');
+        process.exit(1);
+      }
+      // GitHub scanner — Phase 3
+      console.log('GitHub scanner not yet implemented. Coming soon.');
+    }
+
+    if (useJson) {
+      console.log(JSON.stringify({ scan: results }, null, 2));
+    }
+  });
+
 // extract
 program
   .command('extract')

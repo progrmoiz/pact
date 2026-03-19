@@ -53,7 +53,30 @@ CREATE INDEX IF NOT EXISTS idx_commitments_source ON commitments(source_platform
 CREATE INDEX IF NOT EXISTS idx_commitments_content_hash ON commitments(who_id, content_hash) WHERE status = 'active';
 `;
 
-const MIGRATIONS = [MIGRATION_001];
+const MIGRATION_002 = `
+CREATE TABLE IF NOT EXISTS open_loops (
+  source_ref TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  source_platform TEXT NOT NULL,
+  source_channel TEXT,
+  source_url TEXT,
+  who_waiting TEXT,
+  detected_at TEXT NOT NULL,
+  urgency REAL NOT NULL DEFAULT 0,
+  commitment_id TEXT REFERENCES commitments(id),
+  metadata TEXT,
+  dismissed INTEGER NOT NULL DEFAULT 0,
+  dismissed_at TEXT,
+  last_seen_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_open_loops_type ON open_loops(type);
+CREATE INDEX IF NOT EXISTS idx_open_loops_urgency ON open_loops(urgency DESC);
+CREATE INDEX IF NOT EXISTS idx_open_loops_source ON open_loops(source_platform);
+`;
+
+const MIGRATIONS = [MIGRATION_001, MIGRATION_002];
 
 let db: Database.Database | null = null;
 
