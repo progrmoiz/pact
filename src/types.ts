@@ -89,3 +89,25 @@ export interface NudgeCandidate {
   last_nudged_at: string | null;
   escalated: number;
 }
+
+// --- Open Loops (v2) ---
+
+export interface OpenLoop {
+  source_ref: string;
+  type: string;              // "slack.dm", "github.pr-review", "commitment"
+  title: string;
+  source_platform: string;
+  source_channel?: string;
+  source_url?: string;
+  who_waiting?: string;
+  detected_at: string;
+  urgency: number;           // 0.0 - 1.0
+  commitment_id?: string;    // FK to commitments (for bridged commitments)
+  metadata?: Record<string, unknown>;
+  dismissed?: boolean;
+}
+
+export interface OpenLoopScanner {
+  platform: string;
+  scan(): Promise<OpenLoop[]>;
+}

@@ -11,13 +11,66 @@ import { commitmentSchema, identitySchema } from './schemas.js';
 import { runDoctor, formatDoctorOutput } from './doctor.js';
 import { getWhoami, resolvePartialId } from './utils.js';
 import { getPersonStats, formatStats, formatPersonDetail, getDigest, formatDigest } from './stats.js';
+import { getAllOpenLoops, dismissOpenLoop } from './open-loops.js';
+import { formatOpenLoops } from './format.js';
 
 const program = new Command();
 
 program
   .name('pact')
-  .description('Track every promise you make. From the terminal.')
-  .version('0.1.0');
+  .description('Never drop the ball.')
+  .version('0.2.0');
+
+// open (THE command — all open loops ranked by urgency)
+program
+  .command('open')
+  .description('Show all open loops — everything you\'re dropping')
+  .option('--type <type>', 'Filter by type (e.g., slack.dm, commitment, github.pr-review)')
+  .option('--source <platform>', 'Filter by platform (e.g., slack, github)')
+  .option('--limit <n>', 'Max results', '20')
+  .option('--json', 'JSON output')
+  .action((opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    const loops = getAllOpenLoops({
+      type: opts.type,
+      source: opts.source,
+      limit: parseInt(opts.limit),
+    });
+
+    if (useJson) {
+      console.log(JSON.stringify({
+        open_loops: loops,
+        summary: {
+          total: loops.length,
+          critical: loops.filter(l => l.urgency >= 0.8).length,
+        },
+      }, null, 2));
+    } else {
+      console.log(formatOpenLoops(loops));
+    }
+  });
+
+// dismiss (mark an open loop as not needing action)
+program
+  .command('dismiss <source-ref>')
+  .description('Dismiss an open loop')
+  .option('--json', 'JSON output')
+  .action((sourceRef, opts) => {
+    const useJson = opts.json || !isInteractive();
+    getDb();
+
+    const result = dismissOpenLoop(sourceRef);
+    if (useJson) {
+      console.log(JSON.stringify({ dismissed: result, source_ref: sourceRef }));
+    } else if (result) {
+      console.log(`${chalk.green('✓')} Dismissed: ${sourceRef}`);
+    } else {
+      console.error(`Not found: ${sourceRef}`);
+      process.exit(1);
+    }
+  });
 
 // extract
 program

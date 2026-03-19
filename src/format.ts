@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import Table from 'cli-table3';
-import type { Commitment } from './types.js';
+import type { Commitment, OpenLoop } from './types.js';
 
 function shortId(id: string): string {
   return id.substring(0, 8);
@@ -96,4 +96,50 @@ export function formatSnoozeResult(commitment: Commitment): string {
   return `${chalk.blue('⏰')} ${chalk.bold(commitment.what)} → snoozed to ${
     commitment.deadline ? relativeTime(commitment.deadline) + ` (${commitment.deadline.split('T')[0]})` : '?'
   }`;
+}
+
+function urgencyDots(urgency: number): string {
+  const filled = Math.round(urgency * 5);
+  const dots = '●'.repeat(filled) + '○'.repeat(5 - filled);
+  if (urgency >= 0.8) return chalk.red(dots);
+  if (urgency >= 0.5) return chalk.yellow(dots);
+  return chalk.dim(dots);
+}
+
+function formatAge(detectedAt: string): string {
+  const ms = Date.now() - new Date(detectedAt).getTime();
+  const hours = Math.floor(ms / 3600000);
+  if (hours < 1) return `${Math.floor(ms / 60000)}m`;
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return `${days}d`;
+}
+
+function typeLabel(type: string): string {
+  // Pad to consistent width for alignment
+  return type.padEnd(20);
+}
+
+export function formatOpenLoops(loops: OpenLoop[]): string {
+  if (loops.length === 0) return chalk.dim('No open loops. You\'re all caught up.');
+
+  const lines: string[] = [];
+  lines.push('');
+
+  for (const loop of loops) {
+    const dots = urgencyDots(loop.urgency);
+    const type = chalk.cyan(typeLabel(loop.type));
+    const title = loop.urgency >= 0.8 ? chalk.red(loop.title) : loop.title;
+    const age = chalk.dim(formatAge(loop.detected_at).padStart(6));
+    const who = loop.who_waiting ? chalk.dim(loop.who_waiting) : '';
+
+    lines.push(`  ${dots}  ${type} ${title.padEnd(40)} ${age}  ${who}`);
+  }
+
+  const critical = loops.filter(l => l.urgency >= 0.8).length;
+  lines.push('');
+  lines.push(`  ${loops.length} open loop${loops.length !== 1 ? 's' : ''}.${critical > 0 ? chalk.red(` ${critical} critical.`) : ''}`);
+  lines.push('');
+
+  return lines.join('\n');
 }
