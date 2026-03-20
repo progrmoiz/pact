@@ -5,6 +5,8 @@ import { getDb } from './db.js';
 import { listCommitments, getCommitmentById } from './queries.js';
 import { insertCommitment, resolveCommitment } from './mutations.js';
 import { extractCommitments } from './extract.js';
+import { getAllOpenLoops, dismissOpenLoop, upsertOpenLoops, purgeStaleLoops } from './open-loops.js';
+import { now } from './utils.js';
 
 export async function startMcpServer(): Promise<void> {
   // Initialize DB
@@ -68,6 +70,42 @@ export async function startMcpServer(): Promise<void> {
           required: ['text'],
         },
       },
+      {
+        name: 'pact_open',
+        description: 'Show all open loops — unreplied DMs, pending PR reviews, overdue commitments, ranked by urgency',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            type: { type: 'string', description: 'Filter by type (e.g., slack.dm, github.pr-review, commitment)' },
+            source: { type: 'string', description: 'Filter by platform (e.g., slack, github)' },
+            limit: { type: 'number', description: 'Max results (default 20)' },
+          },
+        },
+      },
+      {
+        name: 'pact_dismiss',
+        description: 'Dismiss an open loop by its source_ref',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            source_ref: { type: 'string', description: 'The source_ref of the open loop to dismiss' },
+          },
+          required: ['source_ref'],
+        },
+      },
+      {
+        name: 'pact_add',
+        description: 'Add a commitment directly without LLM extraction',
+        inputSchema: {
+          type: 'object' as const,
+          properties: {
+            what: { type: 'string', description: 'What was committed to' },
+            to: { type: 'string', description: 'Who is waiting on this' },
+            deadline: { type: 'string', description: 'Deadline (ISO date or relative like "2h", "3d")' },
+          },
+          required: ['what'],
+        },
+      },
     ],
   }));
 
@@ -116,6 +154,34 @@ export async function startMcpServer(): Promise<void> {
             })
           ).filter(c => c !== null);
           return { content: [{ type: 'text', text: JSON.stringify(stored, null, 2) }] };
+        }
+
+        case 'pact_open': {
+          const loops = getAllOpenLoops({
+            type: args?.type as string | undefined,
+            source: args?.source as string | undefined,
+            limit: (args?.limit as number) || 20,
+          });
+          return { content: [{ type: 'text', text: JSON.stringify({ open_loops: loops, summary: { total: loops.length, critical: loops.filter(l => l.urgency >= 0.8).length } }, null, 2) }] };
+        }
+
+        case 'pact_dismiss': {
+          const dismissed = dismissOpenLoop(args?.source_ref as string);
+          return { content: [{ type: 'text', text: JSON.stringify({ dismissed, source_ref: args?.source_ref }) }] };
+        }
+
+        case 'pact_add': {
+          const whoami = getDb().prepare("SELECT value FROM config WHERE key = 'whoami'").get() as { value: string } | undefined;
+          const result = insertCommitment({
+            who: whoami?.value || 'me',
+            to_whom: (args?.to as string) || null,
+            what: args?.what as string,
+            raw_text: args?.what as string,
+            deadline: (args?.deadline as string) || null,
+            confidence: 1.0,
+            source_platform: 'mcp',
+          });
+          return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
         }
 
         default:
