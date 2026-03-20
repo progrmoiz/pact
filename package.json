@@ -1,7 +1,7 @@
 {
   "name": "pact-cli",
-  "version": "0.1.0",
-  "description": "Track every promise you make. From the terminal.",
+  "version": "0.2.0",
+  "description": "Never drop the ball. Detect unreplied DMs, pending PR reviews, unanswered questions, forgotten promises.",
   "type": "module",
   "bin": {
     "pact": "./bin/pact.js"

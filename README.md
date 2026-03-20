@@ -1,143 +1,224 @@
-# pact
+# pact — Never drop the ball.
 
-Track every promise you make. From the terminal.
+One command shows everything you're dropping — unreplied DMs, pending PR reviews, unanswered questions, forgotten promises, ignored emails.
 
 ```bash
-$ echo "I'll send the deck to Sarah by Friday" | pact extract
-✓ Send the deck to Sarah
-  Who: Moiz | Confidence: 95%
-  Deadline: in 3d (2026-03-21)
+$ pact open
 
-1 commitment extracted.
+  ●●●●○  slack.dm              Reply to Sarah                        18h  Sarah
+  ●●●●○  gmail.unreplied       Re: Q2 Planning                      24h  James
+  ●●●○○  github.pr-review      Fix N+1 query for specialist agents    6h  muhammad-jawad-92
+  ●●●○○  slack.question        Waiting for answer in #product        12h  me
+  ●●○○○  commitment            Ship the landing page                  2d  —
 ```
 
 ## Install
 
 ```bash
-git clone https://github.com/progrmoiz/pact.git
-cd pact
-npm install
-npm run build
-npm install -g .
+npm install -g pact-cli
 ```
 
-## Setup
+## Quick Start
 
 ```bash
-# Set your Anthropic API key
-export PACT_LLM_API_KEY=sk-ant-...
-
 # Set your identity
 pact whoami "Moiz"
 
-# Check everything works
-pact doctor
+# Connect platforms
+export PACT_SLACK_USER_TOKEN=xoxp-...
+export PACT_GITHUB_TOKEN=ghp_...
+pact init gmail
+
+# Scan everything
+pact scan
+
+# See what you're dropping
+pact open
 ```
 
-## Usage
+## What It Detects
 
-### Extract commitments
+| Type | Source | How |
+|------|--------|-----|
+| `slack.dm` | Unreplied DMs | API — last message from someone else |
+| `slack.mention` | Unresponded @mentions | API — no reply in thread |
+| `slack.question` | Your unanswered questions | API — questions you asked with no response |
+| `github.pr-review` | Pending PR reviews | API — review-requested for you |
+| `github.issue` | Assigned issues | API — issues assigned to you |
+| `gmail.unreplied` | Unreplied emails (To: you) | API — last message not from you |
+| `gmail.cc` | CC'd emails (lower priority) | API — same, with 0.25x urgency |
+| `commitment` | Broken promises | LLM — extracted from meeting notes, messages |
 
-Pipe any text — meeting notes, messages, journal entries:
+Scanners are **zero LLM cost** — pure API calls. Only commitment extraction uses an LLM.
+
+## Commands
+
+### The Main Command
 
 ```bash
-echo "I'll review the PR by tomorrow and send the report to Sarah by Friday" | pact extract
+pact open                          # all open loops, ranked by urgency
+pact open --type slack.dm          # just unreplied DMs
+pact open --source github          # just GitHub loops
+pact open --json                   # machine-readable
 ```
 
-### List commitments
+### Scan Platforms
 
 ```bash
-pact list                 # all active
-pact list --overdue       # past deadline
-pact list --who "Moiz"    # by person
-pact list --status done   # completed
-pact list --json          # machine-readable
+pact scan                          # auto-detect all configured platforms
+pact scan --slack                  # Slack only
+pact scan --github                 # GitHub only
+pact scan --gmail                  # Gmail only
 ```
 
-### Resolve
+### Quick Add (No LLM)
 
 ```bash
-pact resolve 01HXK --note "Shipped it"
-pact resolve 01HXK --cancel
+pact add "Ship the landing page" --deadline friday --to "Sarah"
+pact remind "Check deployment logs" --in 3d
 ```
 
-### Snooze
+### Extract Commitments from Text (LLM)
 
 ```bash
-pact snooze 01HXK --days 3
-pact snooze 01HXK --until friday
+echo "I'll send the report by Friday" | pact extract
+echo "Meeting notes..." | pact extract --source slack --channel general
 ```
 
-### Other commands
+### Manage Commitments
 
 ```bash
-pact whoami              # show current identity
-pact schema commitment   # JSON schema for agents
-pact doctor              # diagnostics
+pact list                          # all active
+pact list --overdue                # past deadline
+pact resolve 01HXK --note "Done"   # mark done
+pact snooze 01HXK --days 3         # push deadline
+pact edit 01HXK --what "Updated"   # edit text
 ```
 
-### Slack (live monitoring)
-
-Connect to Slack and track commitments from conversations automatically — no tagging, no commands. Solo mode uses your own token so no one knows it's running.
+### Dismiss Open Loops
 
 ```bash
-pact ingest --slack
+pact dismiss "gmail.unreplied:abc123"        # single
+pact dismiss --type gmail.cc                  # all CC'd emails
+pact dismiss --from "*.company.com"           # by sender domain
+pact dismiss --older-than 7d                  # by age
 ```
 
-See [docs/slack-setup.md](docs/slack-setup.md) for full setup guide.
-
-### Follow-up nudges
+### Follow-up & Reminders
 
 ```bash
-pact follow-up --dry-run          # preview overdue
-pact follow-up --via stdout       # terminal nudges
-pact follow-up --via slack-dm     # DM nudges with buttons
+pact follow-up --dry-run                     # preview overdue nudges
+pact follow-up --via slack-dm                # send individual nudges
+pact follow-up --format digest               # one consolidated DM
+pact follow-up --format digest --limit 5     # top 5 only
 ```
 
-### MCP server (for AI agents)
+### Background Scanning
 
-Let Claude Code, Cursor, or Windsurf query your commitments directly.
+```bash
+pact install-cron                  # auto-scan every 30min + daily digest
+pact install-cron --show           # preview cron entries
+pact install-cron --remove         # uninstall
+```
+
+### Analytics
+
+```bash
+pact stats                         # per-person delivery rates
+pact stats --who "Moiz"            # detail for one person
+pact digest --period week          # weekly summary
+```
+
+### Diagnostics
+
+```bash
+pact doctor                        # health checks for all integrations
+pact whoami Moiz                   # set identity
+pact identities list               # list all identities
+pact identities merge 01AB 02CD    # merge duplicates
+```
+
+## Urgency Scoring
+
+Every open loop gets a 0.0–1.0 urgency score based on type and age:
+
+| Type | Ramp | Max | Example |
+|------|------|-----|---------|
+| `slack.dm` | Fast (16h) | 0.95 | Critical at 10h |
+| `gmail.unreplied` | Medium (24h) | 0.90 | Critical at ~20h |
+| `slack.mention` | Medium (24h) | 0.90 | Critical at ~20h |
+| `slack.question` | Slow (32h) | 0.85 | Your question, not theirs |
+| `github.pr-review` | Slow (48h) | 0.90 | PRs can wait a day |
+| `gmail.cc` | Very slow (96h) | 0.50 | CC = FYI, usually |
+| `commitment` | Deadline-based | 1.0 | Spikes when overdue |
+
+## For AI Agents
+
+Pact includes an MCP server so Claude Code, Cursor, or any MCP-compatible agent can query your open loops:
 
 ```bash
 pact serve --mcp
 ```
 
-See [docs/mcp-setup.md](docs/mcp-setup.md) for configuration.
+**7 MCP tools:** `pact_list`, `pact_get`, `pact_resolve`, `pact_extract`, `pact_open`, `pact_dismiss`, `pact_add`
 
-## How it works
+All read commands support `--json` and auto-detect non-TTY output for piping.
 
-1. Text goes in — via stdin, Slack, or MCP
-2. Pre-filter catches commitment signals (17 regex patterns, drops 97-99% of noise)
-3. LLM extracts commitments (who, what, to whom, deadline, confidence)
-4. Results stored in local SQLite (`~/.pact/commitments.db`)
-5. Query, resolve, snooze from the terminal or via MCP tools
-6. Follow-up engine nudges overdue items via terminal or Slack DM
+## Live Monitoring
 
-## All commands
+```bash
+pact ingest --slack                # poll Slack for new messages, extract commitments
+```
 
-| Command | Description |
-|---------|-------------|
-| `pact extract` | Extract commitments from piped text |
-| `pact list` | List commitments with filters |
-| `pact resolve <id>` | Mark done or cancelled |
-| `pact snooze <id>` | Reschedule deadline |
-| `pact ingest --slack` | Live Slack monitoring |
-| `pact follow-up` | Nudge overdue commitments |
-| `pact serve --mcp` | MCP server for AI agents |
-| `pact whoami [name]` | Set or show identity |
-| `pact schema <type>` | JSON schema for agents |
-| `pact doctor` | Run diagnostics |
+## Gmail Setup
 
-## Environment variables
+```bash
+pact init gmail                    # walks through Google OAuth setup
+```
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PACT_LLM_API_KEY` | Yes | — | Anthropic API key |
-| `PACT_LLM_MODEL` | No | `claude-haiku-4-5-20251001` | Model to use |
-| `PACT_USER` | No | — | Your name (alternative to `pact whoami`) |
-| `PACT_DB_PATH` | No | `~/.pact/commitments.db` | Database path |
-| `PACT_SLACK_BOT_TOKEN` | For Slack | — | Slack user or bot token |
-| `PACT_SLACK_APP_TOKEN` | For Slack | — | Slack app-level token (Socket Mode) |
+Requires a Google Cloud project with Gmail API enabled. See `pact init gmail` for step-by-step instructions.
+
+## Environment Variables
+
+| Variable | Purpose |
+|----------|---------|
+| `PACT_LLM_API_KEY` | Anthropic API key (for `extract`) |
+| `PACT_LLM_MODEL` | Model override (default: `claude-haiku-4-5-20251001`) |
+| `PACT_USER` | Your name (alternative to `pact whoami`) |
+| `PACT_SLACK_USER_TOKEN` | Slack user token (for scan + ingest) |
+| `PACT_SLACK_BOT_TOKEN` | Slack bot token (for DM reminders) |
+| `PACT_GITHUB_TOKEN` | GitHub PAT (needs repo scope + SSO auth for org repos) |
+| `PACT_GMAIL_CLIENT_ID` | Google OAuth client ID |
+| `PACT_GMAIL_CLIENT_SECRET` | Google OAuth client secret |
+| `PACT_SCOPE_CHANNELS` | Limit Slack scanning to specific channels |
+| `PACT_SCOPE_PEOPLE` | Limit Slack scanning to specific people's DMs |
+
+## How It Works
+
+```
+Text / Slack / GitHub / Gmail
+        │
+        ▼
+   ┌─────────┐     ┌──────────────┐
+   │ Scanners │────▶│ Open Loops   │──▶ pact open
+   │ (API)    │     │ (SQLite)     │
+   └─────────┘     └──────────────┘
+        │                 │
+   ┌─────────┐     ┌──────────────┐
+   │ Extract  │────▶│ Commitments  │──▶ pact list
+   │ (LLM)   │     │ (SQLite)     │
+   └─────────┘     └──────────────┘
+                          │
+                    ┌──────────────┐
+                    │ Follow-up    │──▶ Slack DM / stdout
+                    │ (Nudges)     │
+                    └──────────────┘
+```
+
+- **Scanners** detect open loops via platform APIs — zero LLM cost
+- **Extraction** uses an LLM to find commitments in text
+- **Both feed into urgency scoring** — sorted by what matters most
+- **Everything local** — SQLite at `~/.pact/commitments.db`
 
 ## License
 
