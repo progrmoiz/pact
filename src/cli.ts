@@ -529,6 +529,104 @@ const initCmd = program
   .command('init')
   .description('Set up platform integrations');
 
+const PACT_AUTH_URL = process.env.PACT_AUTH_URL || 'https://pact-auth.vercel.app';
+
+async function hostedOAuthFlow(platform: string): Promise<Record<string, unknown>> {
+  const { randomBytes } = await import('crypto');
+  const code = randomBytes(16).toString('hex');
+
+  const url = `${PACT_AUTH_URL}/api/${platform}/oauth?code=${code}`;
+  console.log(`\nOpening browser for ${platform} authorization...\n`);
+
+  // Open browser
+  const { exec } = await import('child_process');
+  const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'start' : 'xdg-open';
+  exec(`${cmd} "${url}"`);
+
+  console.log(`If the browser didn't open, visit:\n${url}\n`);
+  console.log('Waiting for authorization...');
+
+  // Poll for tokens
+  const pickupUrl = `${PACT_AUTH_URL}/api/pickup/${code}`;
+  const maxAttempts = 60; // 2 minutes
+
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise(r => setTimeout(r, 2000));
+    try {
+      const res = await fetch(pickupUrl);
+      const data = await res.json() as { status: string; tokens?: Record<string, unknown> };
+      if (data.status === 'ready' && data.tokens) {
+        return data.tokens;
+      }
+    } catch {
+      // Network error, keep polling
+    }
+  }
+
+  throw new Error('Authorization timed out after 2 minutes');
+}
+
+initCmd
+  .command('slack')
+  .description('Connect Slack')
+  .option('--manual', 'Manual token setup (paste your own tokens)')
+  .action(async (opts) => {
+    if (opts.manual) {
+      console.log(`
+Manual Slack Setup:
+
+1. Create a Slack app at https://api.slack.com/apps
+2. Add user token scopes: channels:history, channels:read, groups:history,
+   groups:read, im:history, im:read, mpim:history, mpim:read, search:read, users:read
+3. Install to workspace and copy the User OAuth Token
+4. Set: export PACT_SLACK_USER_TOKEN=xoxp-...
+5. Run: pact doctor
+`);
+      return;
+    }
+
+    try {
+      const tokens = await hostedOAuthFlow('slack');
+      const { writeFileSync, existsSync, readFileSync, mkdirSync } = await import('fs');
+      const { join } = await import('path');
+      const { homedir } = await import('os');
+
+      // Save tokens to ~/.pact/slack-tokens.json
+      const dir = join(homedir(), '.pact');
+      if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'slack-tokens.json'), JSON.stringify(tokens, null, 2));
+
+      // Also append to .env if it exists in cwd
+      const envPath = join(process.cwd(), '.env');
+      const envLines: string[] = [];
+      if (tokens.user_token) envLines.push(`PACT_SLACK_USER_TOKEN=${tokens.user_token}`);
+      if (tokens.bot_token) envLines.push(`PACT_SLACK_BOT_TOKEN=${tokens.bot_token}`);
+
+      if (existsSync(envPath)) {
+        let env = readFileSync(envPath, 'utf-8');
+        for (const line of envLines) {
+          const key = line.split('=')[0];
+          const regex = new RegExp(`^${key}=.*$`, 'm');
+          if (regex.test(env)) {
+            env = env.replace(regex, line);
+          } else {
+            env = env.trimEnd() + '\n' + line + '\n';
+          }
+        }
+        writeFileSync(envPath, env);
+      }
+
+      console.log(`\n${chalk.green('✓')} Slack connected!`);
+      if (tokens.user_token) console.log(`  User token: ${(tokens.user_token as string).substring(0, 20)}...`);
+      if (tokens.bot_token) console.log(`  Bot token: ${(tokens.bot_token as string).substring(0, 20)}...`);
+      console.log(`  Saved to: ~/.pact/slack-tokens.json`);
+      if (existsSync(envPath)) console.log(`  Updated: .env`);
+    } catch (err) {
+      console.error(`\n${(err as Error).message}`);
+      process.exit(1);
+    }
+  });
+
 initCmd
   .command('gmail')
   .description('Connect Gmail for email scanning')
