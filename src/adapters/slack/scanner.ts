@@ -36,6 +36,10 @@ export class SlackScanner implements OpenLoopScanner {
     const mentionLoops = await this.scanUnrepliedMentions(myUserId);
     loops.push(...mentionLoops);
 
+    // Scan my unanswered questions
+    const questionLoops = await this.scanMyUnansweredQuestions(myUserId);
+    loops.push(...questionLoops);
+
     return loops;
   }
 
@@ -186,4 +190,94 @@ export class SlackScanner implements OpenLoopScanner {
 
     return loops;
   }
+
+  /**
+   * Find questions I asked that nobody has answered yet.
+   * Inspired by Vercel's Nudge — uses search.messages with "from:me ?"
+   */
+  private async scanMyUnansweredQuestions(myUserId: string): Promise<OpenLoop[]> {
+    const loops: OpenLoop[] = [];
+    const thresholdMs = parseInt(process.env.PACT_QUESTION_THRESHOLD || '14400') * 1000; // default 4h
+
+    try {
+      const searchResult = await this.client.search.messages({
+        query: `from:<@${myUserId}> ?`,
+        sort: 'timestamp',
+        sort_dir: 'desc',
+        count: 30,
+      });
+
+      const matches = searchResult.messages?.matches || [];
+
+      for (const match of matches) {
+        // Must be from me
+        if (match.user !== myUserId) continue;
+
+        // Must be a real question (not just a URL with query string)
+        if (!match.text || !isLikelyQuestion(match.text)) continue;
+
+        const msgTime = parseFloat(match.ts!) * 1000;
+        const ageMs = Date.now() - msgTime;
+
+        // Skip if > 7 days old
+        if (ageMs > 7 * 24 * 60 * 60 * 1000) continue;
+
+        // Skip if not old enough
+        if (ageMs < thresholdMs) continue;
+
+        // Check if someone else replied
+        const threadTs = (match as Record<string, unknown>).thread_ts as string || match.ts;
+        if (threadTs && match.channel?.id) {
+          try {
+            const replies = await this.client.conversations.replies({
+              channel: match.channel.id,
+              ts: threadTs!,
+              limit: 50,
+            });
+
+            const someoneElseReplied = replies.messages?.some(
+              m => m.user !== myUserId && m.ts !== threadTs && !m.bot_id && !(m as Record<string, unknown>).subtype
+            );
+            if (someoneElseReplied) continue; // Got an answer
+          } catch {
+            // Can't check replies — skip to be safe
+            continue;
+          }
+        }
+
+        const channelName = match.channel?.name || match.channel?.id || 'unknown';
+        const ageSeconds = Math.floor(ageMs / 1000);
+        const ref = `slack.question:${match.channel?.id}:${match.ts}`;
+
+        loops.push({
+          source_ref: ref,
+          type: 'slack.question',
+          title: `Waiting for answer in #${channelName}`,
+          source_platform: 'slack',
+          source_channel: `#${channelName}`,
+          source_url: match.permalink || undefined,
+          who_waiting: 'me',
+          detected_at: new Date(msgTime).toISOString(),
+          urgency: computeUrgency('slack.question', ageSeconds),
+          metadata: {
+            preview: match.text.substring(0, 100),
+            channel_id: match.channel?.id,
+            thread_ts: threadTs,
+          },
+        });
+      }
+    } catch (err) {
+      console.warn(`Slack question scan skipped: ${(err as Error).message}`);
+    }
+
+    return loops;
+  }
+}
+
+function isLikelyQuestion(text: string): boolean {
+  if (!text.includes('?')) return false;
+  const withoutUrls = text.replace(/https?:\/\/[^\s]+/g, '');
+  if (!withoutUrls.includes('?')) return false;
+  if (text.trim().length < 5) return false;
+  return true;
 }

@@ -11,6 +11,7 @@ export function computeUrgency(type: string, ageSeconds: number, deadline?: stri
   if (type === 'slack.dm')           return Math.min(0.3 + ageHours / 16, 0.95);
   if (type === 'slack.mention')      return Math.min(0.2 + ageHours / 24, 0.90);
   if (type === 'slack.thread')       return Math.min(0.15 + ageHours / 32, 0.85);
+  if (type === 'slack.question')      return Math.min(0.15 + ageHours / 32, 0.85);
   if (type === 'github.pr-review')   return Math.min(0.2 + ageHours / 48, 0.90);
   if (type === 'github.issue')       return Math.min(0.1 + ageHours / 168, 0.70);
   if (type === 'gmail.unreplied')    return Math.min(0.2 + ageHours / 24, 0.90);
