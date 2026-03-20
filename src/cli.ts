@@ -115,6 +115,7 @@ program
   .option('--slack', 'Scan Slack for unreplied DMs and mentions')
   .option('--github', 'Scan GitHub for PR reviews and assigned issues')
   .option('--gmail', 'Scan Gmail for unreplied emails')
+  .option('--no-classify', 'Skip LLM classification (regex-only filtering)')
   .option('--json', 'JSON output')
   .action(async (opts) => {
     const useJson = opts.json || !isInteractive();
@@ -148,7 +149,8 @@ program
       }
 
       const { SlackScanner } = await import('./adapters/slack/scanner.js');
-      const scanner = new SlackScanner(token);
+      const classify = opts.classify !== false;
+      const scanner = new SlackScanner(token, { classify });
 
       if (!useJson) process.stdout.write('Scanning Slack...');
       const loops = await scanner.scan();

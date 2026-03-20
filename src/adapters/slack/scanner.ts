@@ -3,18 +3,21 @@ import type { OpenLoop, OpenLoopScanner } from '../../types.js';
 import { resolveUsername, discoverChannels } from './shared.js';
 import { computeUrgency } from '../../open-loops.js';
 import { now } from '../../utils.js';
+import { isObviousCloser, classifyExpectsReply } from '../../classify.js';
 
 /**
  * Slack Open Loop Scanner — detects unreplied DMs and mentions.
- * API-only, zero LLM cost. Self-resolving.
+ * Hybrid: API detection + regex/LLM classification to filter false positives.
  */
 export class SlackScanner implements OpenLoopScanner {
   platform = 'slack';
   private client: WebClient;
   private myUserId: string | null = null;
+  private classify: boolean;
 
-  constructor(token: string) {
+  constructor(token: string, options?: { classify?: boolean }) {
     this.client = new WebClient(token);
+    this.classify = options?.classify ?? true;
   }
 
   private async getMyUserId(): Promise<string> {
@@ -79,6 +82,16 @@ export class SlackScanner implements OpenLoopScanner {
         const msgTime = parseFloat(lastMsg.ts) * 1000;
         const ageMs = Date.now() - msgTime;
         if (ageMs < thresholdMs) continue;
+
+        // Classify: is someone actually waiting, or is this a conversation closer?
+        const preview = (lastMsg.text || '').substring(0, 200);
+        if (this.classify) {
+          if (isObviousCloser(preview)) continue;
+          if (process.env.PACT_LLM_API_KEY) {
+            const expectsReply = await classifyExpectsReply(preview);
+            if (!expectsReply) continue;
+          }
+        }
 
         const fromName = await resolveUsername(this.client, lastMsg.user!);
         const ageSeconds = Math.floor(ageMs / 1000);
@@ -154,6 +167,16 @@ export class SlackScanner implements OpenLoopScanner {
             if (iReplied) continue; // I already responded
           } catch {
             // Can't check replies — include it as a loop
+          }
+        }
+
+        // Classify: is this mention actually expecting a reply?
+        if (this.classify && match.text) {
+          const mentionPreview = match.text.substring(0, 200);
+          if (isObviousCloser(mentionPreview)) continue;
+          if (process.env.PACT_LLM_API_KEY) {
+            const expectsReply = await classifyExpectsReply(mentionPreview);
+            if (!expectsReply) continue;
           }
         }
 
