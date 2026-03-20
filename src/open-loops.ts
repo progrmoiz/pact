@@ -13,6 +13,8 @@ export function computeUrgency(type: string, ageSeconds: number, deadline?: stri
   if (type === 'slack.thread')       return Math.min(0.15 + ageHours / 32, 0.85);
   if (type === 'github.pr-review')   return Math.min(0.2 + ageHours / 48, 0.90);
   if (type === 'github.issue')       return Math.min(0.1 + ageHours / 168, 0.70);
+  if (type === 'gmail.unreplied')    return Math.min(0.2 + ageHours / 24, 0.90);
+  if (type === 'gmail.cc')           return Math.min(0.05 + ageHours / 96, 0.50);
 
   if (type === 'commitment' && deadline) {
     const overdueMs = Date.now() - new Date(deadline).getTime();
@@ -165,6 +167,42 @@ export function dismissOpenLoop(sourceRef: string): boolean {
     UPDATE open_loops SET dismissed = 1, dismissed_at = ? WHERE source_ref = ?
   `).run(now(), sourceRef);
   return result.changes > 0;
+}
+
+/**
+ * Batch dismiss open loops by filters.
+ */
+export function batchDismiss(filters: {
+  fromPattern?: string;
+  olderThanMs?: number;
+  type?: string;
+}): number {
+  const db = getDb();
+  const timestamp = now();
+  const conditions: string[] = ['dismissed = 0'];
+  const params: unknown[] = [];
+
+  if (filters.type) {
+    conditions.push('type = ?');
+    params.push(filters.type);
+  }
+
+  if (filters.olderThanMs) {
+    const cutoff = new Date(Date.now() - filters.olderThanMs).toISOString();
+    conditions.push('detected_at < ?');
+    params.push(cutoff);
+  }
+
+  if (filters.fromPattern) {
+    // Convert glob pattern to SQL LIKE: *.company.com -> %company.com
+    const like = filters.fromPattern.replace(/\*/g, '%');
+    conditions.push('(who_waiting LIKE ? OR json_extract(metadata, "$.sender_email") LIKE ?)');
+    params.push(like, like);
+  }
+
+  const sql = `UPDATE open_loops SET dismissed = 1, dismissed_at = ? WHERE ${conditions.join(' AND ')}`;
+  const result = db.prepare(sql).run(timestamp, ...params);
+  return result.changes;
 }
 
 /**

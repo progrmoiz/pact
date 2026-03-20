@@ -99,6 +99,28 @@ export function runDoctor(): Check[] {
     checks.push({ name: 'Slack', status: 'warn', detail: 'No Slack tokens. Set PACT_SLACK_USER_TOKEN (solo) or PACT_SLACK_BOT_TOKEN + PACT_SLACK_APP_TOKEN (team)' });
   }
 
+  // GitHub token
+  if (process.env.PACT_GITHUB_TOKEN) {
+    checks.push({ name: 'GitHub', status: 'ok', detail: 'Token set' });
+  } else {
+    checks.push({ name: 'GitHub', status: 'warn', detail: 'PACT_GITHUB_TOKEN not set' });
+  }
+
+  // Gmail
+  const gmailCredsPath = join(process.env.HOME || '~', '.pact', 'gmail-credentials.json');
+  if (existsSync(gmailCredsPath)) {
+    const hasClientId = !!process.env.PACT_GMAIL_CLIENT_ID;
+    if (hasClientId) {
+      checks.push({ name: 'Gmail', status: 'ok', detail: 'Credentials saved, client configured' });
+    } else {
+      checks.push({ name: 'Gmail', status: 'warn', detail: 'Credentials saved but PACT_GMAIL_CLIENT_ID not set in environment' });
+    }
+  } else if (process.env.PACT_GMAIL_CLIENT_ID) {
+    checks.push({ name: 'Gmail', status: 'warn', detail: 'Client configured but not authenticated. Run: pact init gmail' });
+  } else {
+    checks.push({ name: 'Gmail', status: 'warn', detail: 'Not configured. Run: pact init gmail' });
+  }
+
   // Agent detection
   const agents: string[] = [];
   const home = process.env.HOME || '~';

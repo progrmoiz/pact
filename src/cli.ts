@@ -11,7 +11,7 @@ import { commitmentSchema, identitySchema } from './schemas.js';
 import { runDoctor, formatDoctorOutput } from './doctor.js';
 import { getWhoami, resolvePartialId } from './utils.js';
 import { getPersonStats, formatStats, formatPersonDetail, getDigest, formatDigest } from './stats.js';
-import { getAllOpenLoops, dismissOpenLoop } from './open-loops.js';
+import { getAllOpenLoops, dismissOpenLoop, batchDismiss } from './open-loops.js';
 import { formatOpenLoops } from './format.js';
 
 const program = new Command();
@@ -52,14 +52,50 @@ program
     }
   });
 
-// dismiss (mark an open loop as not needing action)
+// dismiss (mark open loop(s) as not needing action)
 program
-  .command('dismiss <source-ref>')
-  .description('Dismiss an open loop')
+  .command('dismiss [source-ref]')
+  .description('Dismiss open loop(s) — single or batch')
+  .option('--from <pattern>', 'Dismiss all from sender pattern (e.g., *.company.com)')
+  .option('--older-than <duration>', 'Dismiss all older than duration (e.g., 24h, 3d)')
+  .option('--type <type>', 'Dismiss all of a type (e.g., gmail.cc)')
   .option('--json', 'JSON output')
   .action((sourceRef, opts) => {
     const useJson = opts.json || !isInteractive();
     getDb();
+
+    // Batch dismiss
+    if (opts.from || opts.olderThan || opts.type) {
+      let olderThanMs: number | undefined;
+      if (opts.olderThan) {
+        const match = opts.olderThan.match(/^(\d+)(h|d|w)$/);
+        if (!match) {
+          console.error(`Cannot parse duration: ${opts.olderThan}. Use: 24h, 3d, 1w`);
+          process.exit(1);
+        }
+        const [, n, unit] = match;
+        olderThanMs = parseInt(n) * ({ h: 3600000, d: 86400000, w: 604800000 } as Record<string, number>)[unit];
+      }
+
+      const count = batchDismiss({
+        fromPattern: opts.from,
+        olderThanMs,
+        type: opts.type,
+      });
+
+      if (useJson) {
+        console.log(JSON.stringify({ dismissed: count, filters: { from: opts.from, older_than: opts.olderThan, type: opts.type } }));
+      } else {
+        console.log(`${chalk.green('✓')} Dismissed ${count} open loop${count !== 1 ? 's' : ''}`);
+      }
+      return;
+    }
+
+    // Single dismiss
+    if (!sourceRef) {
+      console.error('Specify a source-ref or use --from, --older-than, --type for batch dismiss');
+      process.exit(1);
+    }
 
     const result = dismissOpenLoop(sourceRef);
     if (useJson) {
@@ -78,18 +114,23 @@ program
   .description('Scan platforms for open loops')
   .option('--slack', 'Scan Slack for unreplied DMs and mentions')
   .option('--github', 'Scan GitHub for PR reviews and assigned issues')
+  .option('--gmail', 'Scan Gmail for unreplied emails')
   .option('--json', 'JSON output')
   .action(async (opts) => {
     const useJson = opts.json || !isInteractive();
     getDb();
 
-    if (!opts.slack && !opts.github) {
+    if (!opts.slack && !opts.github && !opts.gmail) {
       // Auto-detect: scan all configured platforms
       opts.slack = !!(process.env.PACT_SLACK_USER_TOKEN || process.env.PACT_SLACK_BOT_TOKEN);
       opts.github = !!process.env.PACT_GITHUB_TOKEN;
 
-      if (!opts.slack && !opts.github) {
-        console.error('No platforms configured. Set PACT_SLACK_USER_TOKEN or PACT_GITHUB_TOKEN.');
+      // Check for Gmail credentials file
+      const { hasCredentials: hasGmailCreds } = await import('./adapters/gmail/auth.js');
+      opts.gmail = hasGmailCreds() && !!(process.env.PACT_GMAIL_CLIENT_ID);
+
+      if (!opts.slack && !opts.github && !opts.gmail) {
+        console.error('No platforms configured. Set PACT_SLACK_USER_TOKEN, PACT_GITHUB_TOKEN, or run "pact init gmail".');
         process.exit(1);
       }
     }
@@ -137,6 +178,27 @@ program
 
       results.push({ platform: 'github', found: loops.length, purged });
       if (!useJson) console.log(` ${loops.length} open loop${loops.length !== 1 ? 's' : ''} (${purged} resolved)`);
+    }
+
+    if (opts.gmail) {
+      try {
+        const { loadCredentials } = await import('./adapters/gmail/auth.js');
+        const auth = loadCredentials();
+        const { GmailScanner } = await import('./adapters/gmail/scanner.js');
+        const scanner = new GmailScanner(auth);
+
+        if (!useJson) process.stdout.write('Scanning Gmail...');
+        const loops = await scanner.scan();
+
+        const { upserted } = upsertOpenLoops(loops);
+        const purged = purgeStaleLoops('gmail', scanTimestamp);
+
+        results.push({ platform: 'gmail', found: loops.length, purged });
+        if (!useJson) console.log(` ${loops.length} open loop${loops.length !== 1 ? 's' : ''} (${purged} resolved)`);
+      } catch (err) {
+        if (!useJson) console.error(`\nGmail scan failed: ${(err as Error).message}`);
+        results.push({ platform: 'gmail', found: 0, purged: 0 });
+      }
     }
 
     if (useJson) {
@@ -460,6 +522,43 @@ program
       console.error(`Unknown schema type: ${type}. Use: commitment, identity`);
       process.exit(1);
     }
+  });
+
+// init (platform setup wizards)
+const initCmd = program
+  .command('init')
+  .description('Set up platform integrations');
+
+initCmd
+  .command('gmail')
+  .description('Connect Gmail for email scanning')
+  .action(async () => {
+    const clientId = process.env.PACT_GMAIL_CLIENT_ID;
+    const clientSecret = process.env.PACT_GMAIL_CLIENT_SECRET;
+
+    if (!clientId || !clientSecret) {
+      console.log(`
+Gmail Setup — Self-Hosted OAuth
+
+1. Go to https://console.cloud.google.com/
+2. Create a new project (or select existing)
+3. Enable the Gmail API:
+   APIs & Services → Library → Search "Gmail API" → Enable
+4. Create OAuth credentials:
+   APIs & Services → Credentials → Create Credentials → OAuth client ID
+   - Application type: Web application
+   - Authorized redirect URIs: http://localhost:3000/callback
+5. Copy the Client ID and Client Secret
+6. Set environment variables:
+   export PACT_GMAIL_CLIENT_ID="your-client-id"
+   export PACT_GMAIL_CLIENT_SECRET="your-client-secret"
+7. Run this command again: pact init gmail
+`);
+      process.exit(1);
+    }
+
+    const { authenticate } = await import('./adapters/gmail/auth.js');
+    await authenticate();
   });
 
 // doctor
