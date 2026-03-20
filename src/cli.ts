@@ -561,6 +561,58 @@ Gmail Setup — Self-Hosted OAuth
     await authenticate();
   });
 
+// install-cron
+program
+  .command('install-cron')
+  .description('Install cron jobs for automatic scanning and reminders')
+  .option('--remove', 'Remove pact cron entries')
+  .option('--show', 'Show what would be installed without installing')
+  .option('--scan-interval <min>', 'Scan interval in minutes', '30')
+  .option('--remind-at <hour>', 'Daily reminder hour (24h format)', '9')
+  .action(async (opts) => {
+    const { execSync } = await import('child_process');
+    const marker = '# pact-cron';
+    const pactBin = process.argv[1] || 'pact';
+
+    // Build cron entries
+    const scanEntry = `*/${opts.scanInterval} * * * * ${pactBin} scan --silent 2>&1 >> ~/.pact/cron.log ${marker}: scan`;
+    const remindEntry = `0 ${opts.remindAt} * * * ${pactBin} follow-up --via slack-dm 2>&1 >> ~/.pact/cron.log ${marker}: remind`;
+
+    if (opts.show) {
+      console.log('Would install:\n');
+      console.log(`  ${scanEntry}`);
+      console.log(`  ${remindEntry}`);
+      return;
+    }
+
+    // Get existing crontab
+    let existing = '';
+    try {
+      existing = execSync('crontab -l 2>/dev/null', { encoding: 'utf-8' });
+    } catch {
+      // No existing crontab
+    }
+
+    if (opts.remove) {
+      const filtered = existing.split('\n').filter(l => !l.includes(marker)).join('\n').trimEnd();
+      execSync(`echo "${filtered}" | crontab -`, { encoding: 'utf-8' });
+      console.log(`${chalk.green('✓')} Removed pact cron entries`);
+      return;
+    }
+
+    // Check if already installed
+    if (existing.includes(marker)) {
+      console.log('Pact cron entries already installed. Use --remove to reinstall.');
+      return;
+    }
+
+    const newCrontab = [existing.trimEnd(), '', scanEntry, remindEntry, ''].join('\n');
+    execSync(`echo "${newCrontab}" | crontab -`, { encoding: 'utf-8' });
+    console.log(`${chalk.green('✓')} Installed pact cron jobs:`);
+    console.log(`  Scan: every ${opts.scanInterval} minutes`);
+    console.log(`  Remind: daily at ${opts.remindAt}:00`);
+  });
+
 // doctor
 program
   .command('doctor')
@@ -612,6 +664,8 @@ program
   .command('follow-up')
   .description('Send nudges for overdue commitments')
   .option('--via <channel>', 'Output channel: stdout, slack-dm', 'stdout')
+  .option('--format <format>', 'Output format: individual, digest', 'individual')
+  .option('--limit <n>', 'Max items in digest', '7')
   .option('--dry-run', 'Preview without sending')
   .option('--grace-period <duration>', 'Grace period after deadline', '4h')
   .option('--max-nudges <n>', 'Max nudges before escalation', '3')
@@ -623,6 +677,19 @@ program
     const useJson = opts.json || !isInteractive();
     getDb();
 
+    // Digest mode — consolidated open loops message
+    if (opts.format === 'digest') {
+      const { runDigest } = await import('./follow-up.js');
+      const result = await runDigest({
+        via: opts.via as 'stdout' | 'slack-dm',
+        limit: parseInt(opts.limit),
+        dryRun: !!opts.dryRun,
+      });
+      if (useJson) console.log(JSON.stringify(result));
+      return;
+    }
+
+    // Individual nudge mode (default)
     const { runFollowUp } = await import('./follow-up.js');
     const result = await runFollowUp({
       via: opts.via as 'stdout' | 'slack-dm',

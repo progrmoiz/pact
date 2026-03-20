@@ -2,7 +2,8 @@ import { getNudgeCandidates } from './queries.js';
 import { incrementNudge, markEscalated } from './mutations.js';
 import { parseDuration } from './utils.js';
 import { sendStdoutNudge } from './outputs/stdout.js';
-import type { FollowUpConfig, NudgeCandidate } from './types.js';
+import { getAllOpenLoops } from './open-loops.js';
+import type { FollowUpConfig, NudgeCandidate, OpenLoop } from './types.js';
 
 function formatNudgeMessage(candidate: NudgeCandidate): string {
   const daysOverdue = Math.ceil(
@@ -65,4 +66,82 @@ export async function runFollowUp(config: FollowUpConfig): Promise<{ nudged: num
   }
 
   return { nudged, escalated };
+}
+
+/**
+ * Format a digest DM — one consolidated message with top open loops.
+ */
+function urgencyDots(urgency: number): string {
+  const filled = Math.round(urgency * 5);
+  return '●'.repeat(filled) + '○'.repeat(5 - filled);
+}
+
+function formatAge(detectedAt: string): string {
+  const ms = Date.now() - new Date(detectedAt).getTime();
+  const hours = Math.floor(ms / 3600000);
+  if (hours < 1) return `${Math.floor(ms / 60000)}m`;
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+export function formatDigestMessage(loops: OpenLoop[], limit: number = 7): string {
+  const top = loops.slice(0, limit);
+  if (top.length === 0) return 'All caught up — no open loops right now.';
+
+  const lines: string[] = [`*You have ${loops.length} open loop${loops.length !== 1 ? 's' : ''}:*\n`];
+
+  top.forEach((loop, i) => {
+    const dots = urgencyDots(loop.urgency);
+    const age = formatAge(loop.detected_at);
+    const who = loop.who_waiting ? ` (${loop.who_waiting})` : '';
+    const url = loop.source_url ? `<${loop.source_url}|${loop.title}>` : loop.title;
+
+    lines.push(`${i + 1}. ${dots} ${url}${who} — _${age}_`);
+  });
+
+  if (loops.length > limit) {
+    lines.push(`\n_...and ${loops.length - limit} more. Run \`pact open\` to see all._`);
+  }
+
+  lines.push('\n_Reply DONE <number> to dismiss._');
+  return lines.join('\n');
+}
+
+export async function runDigest(config: {
+  via: 'stdout' | 'slack-dm';
+  limit: number;
+  dryRun: boolean;
+}): Promise<{ sent: number }> {
+  const loops = getAllOpenLoops({ limit: 50 });
+  const message = formatDigestMessage(loops, config.limit);
+
+  if (config.dryRun || config.via === 'stdout') {
+    console.log(message);
+    return { sent: loops.length };
+  }
+
+  if (config.via === 'slack-dm') {
+    const { getSlackSendToken } = await import('./adapters/slack/types.js');
+    const sendToken = getSlackSendToken();
+    if (!sendToken) {
+      console.error('No Slack token. Set PACT_SLACK_BOT_TOKEN or PACT_SLACK_USER_TOKEN.');
+      process.exit(1);
+    }
+
+    const { WebClient } = await import('@slack/web-api');
+    const client = new WebClient(sendToken.token);
+    const auth = await client.auth.test();
+    const userId = auth.user_id as string;
+
+    await client.chat.postMessage({
+      channel: userId,
+      text: message,
+      mrkdwn: true,
+    });
+
+    return { sent: loops.length };
+  }
+
+  return { sent: 0 };
 }
